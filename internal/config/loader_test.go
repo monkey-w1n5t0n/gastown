@@ -1100,3 +1100,130 @@ func TestSaveTownSettings(t *testing.T) {
 		}
 	})
 }
+
+// TestBuildStartupCommandWithTownRoot_AcutalTown tests the new function with the actual ~/gt directory.
+// This verifies that when we pass an explicit town root, it correctly loads the default_agent
+// configuration instead of falling back to vanilla claude defaults.
+func TestBuildStartupCommandWithTownRoot_ActualTown(t *testing.T) {
+	t.Run("uses actual town settings for default agent", func(t *testing.T) {
+		// Use the actual town root from the user's system
+		townRoot := "/home/w1n5t0n/gt"
+
+		// Verify town root exists
+		if _, err := os.Stat(townRoot); os.IsNotExist(err) {
+			t.Skipf("town root %s does not exist, skipping test", townRoot)
+			return
+		}
+
+		envVars := map[string]string{
+			"GT_ROLE":  "boot",
+			"BD_ACTOR": "deacon-boot",
+		}
+
+		// Call the new function with explicit town root
+		cmd := BuildStartupCommandWithTownRoot(envVars, townRoot, "gt boot triage")
+
+		// The command should contain the configured agent's settings
+		// From ~/gt/settings/config.json: default_agent is "glm"
+		// glm agent uses: claude --model glm-4.7 --dangerously-skip-permissions
+
+		// Check environment variables are set
+		if !strings.Contains(cmd, "export") {
+			t.Error("expected export in command")
+		}
+		if !strings.Contains(cmd, "GT_ROLE=boot") {
+			t.Error("expected GT_ROLE=boot in command")
+		}
+		if !strings.Contains(cmd, "BD_ACTOR=deacon-boot") {
+			t.Error("expected BD_ACTOR=deacon-boot in command")
+		}
+
+		// The key assertion: should use glm-4.7 model from town settings, NOT default claude
+		if !strings.Contains(cmd, "--model") {
+			t.Error("expected --model flag in command (from glm agent config)")
+		}
+		if !strings.Contains(cmd, "glm-4.7") {
+			t.Errorf("expected glm-4.7 model in command, got: %s", cmd)
+		}
+
+		// Should contain the initial prompt
+		if !strings.Contains(cmd, "gt boot triage") {
+			t.Error("expected initial prompt in command")
+		}
+
+		t.Logf("Generated command: %s", cmd)
+	})
+
+	t.Run("compares with cwd-based behavior", func(t *testing.T) {
+		townRoot := "/home/w1n5t0n/gt"
+
+		// Verify town root exists
+		if _, err := os.Stat(townRoot); os.IsNotExist(err) {
+			t.Skipf("town root %s does not exist, skipping test", townRoot)
+			return
+		}
+
+		envVars := map[string]string{
+			"GT_ROLE":  "test",
+			"BD_ACTOR": "test-agent",
+		}
+
+		// Test 1: With explicit town root (new function)
+		cmdWithRoot := BuildStartupCommandWithTownRoot(envVars, townRoot, "")
+
+		// Test 2: Save current cwd, change to /tmp, test cwd-based (old function)
+		originalWd, _ := os.Getwd()
+		_ = os.Chdir("/tmp")
+		defer func() { _ = os.Chdir(originalWd) }()
+
+		// The old BuildStartupCommand with empty rigPath uses cwd
+		cmdFromCwd := BuildStartupCommand(envVars, "", "")
+
+		// The explicit town root version should use glm-4.7
+		// The cwd version from /tmp should fall back to default claude
+		if !strings.Contains(cmdWithRoot, "glm-4.7") {
+			t.Errorf("explicit town root should use glm-4.7, got: %s", cmdWithRoot)
+		}
+
+		// The cwd version from outside town should NOT have glm-4.7
+		if strings.Contains(cmdFromCwd, "glm-4.7") {
+			t.Errorf("cwd-based from /tmp should NOT use glm-4.7, got: %s", cmdFromCwd)
+		}
+
+		t.Logf("With explicit root: %s", cmdWithRoot)
+		t.Logf("From cwd (/tmp): %s", cmdFromCwd)
+	})
+}
+
+// TestBuildAgentStartupCommandWithTownRoot_ActualTown tests the convenience wrapper.
+func TestBuildAgentStartupCommandWithTownRoot_ActualTown(t *testing.T) {
+	townRoot := "/home/w1n5t0n/gt"
+
+	// Verify town root exists
+	if _, err := os.Stat(townRoot); os.IsNotExist(err) {
+		t.Skipf("town root %s does not exist, skipping test", townRoot)
+		return
+	}
+
+	// Test the exact call pattern used in boot.go
+	cmd := BuildAgentStartupCommandWithTownRoot("boot", "deacon-boot", townRoot, "gt boot triage")
+
+	// Should contain all expected components
+	if !strings.Contains(cmd, "GT_ROLE=boot") {
+		t.Error("expected GT_ROLE=boot")
+	}
+	if !strings.Contains(cmd, "BD_ACTOR=deacon-boot") {
+		t.Error("expected BD_ACTOR=deacon-boot")
+	}
+	if !strings.Contains(cmd, "GIT_AUTHOR_NAME=deacon-boot") {
+		t.Error("expected GIT_AUTHOR_NAME=deacon-boot")
+	}
+	if !strings.Contains(cmd, "glm-4.7") {
+		t.Errorf("expected glm-4.7 model, got: %s", cmd)
+	}
+	if !strings.Contains(cmd, "gt boot triage") {
+		t.Error("expected initial prompt")
+	}
+
+	t.Logf("Boot startup command: %s", cmd)
+}

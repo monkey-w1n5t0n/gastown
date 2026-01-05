@@ -25,6 +25,7 @@ var (
 	ErrMissingField = errors.New("missing required field")
 )
 
+
 // LoadTownConfig loads and validates a town configuration file.
 func LoadTownConfig(path string) (*TownConfig, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // G304: path is from trusted config location
@@ -743,7 +744,8 @@ func ResolveAgentConfig(townRoot, rigPath string) *RuntimeConfig {
 	}
 
 	// Load town settings for agent lookup
-	townSettings, err := LoadOrCreateTownSettings(TownSettingsPath(townRoot))
+	settingsPath := TownSettingsPath(townRoot)
+	townSettings, err := LoadOrCreateTownSettings(settingsPath)
 	if err != nil {
 		townSettings = NewTownSettings()
 	}
@@ -908,9 +910,42 @@ func BuildStartupCommand(envVars map[string]string, rigPath, prompt string) stri
 	return cmd
 }
 
+// BuildStartupCommandWithTownRoot builds a full startup command with an explicit town root.
+// Use this when the town root is known and cwd detection is unreliable.
+// envVars is a map of environment variable names to values.
+// townRoot is the path to the town directory (e.g., ~/gt).
+// prompt is optional - if provided, appended as the initial prompt.
+func BuildStartupCommandWithTownRoot(envVars map[string]string, townRoot, prompt string) string {
+	rc := ResolveAgentConfig(townRoot, "")
+
+	// Build environment export prefix
+	var exports []string
+	for k, v := range envVars {
+		exports = append(exports, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Sort for deterministic output
+	sort.Strings(exports)
+
+	var cmd string
+	if len(exports) > 0 {
+		cmd = "export " + strings.Join(exports, " ") + " && "
+	}
+
+	// Add runtime command
+	if prompt != "" {
+		cmd += rc.BuildCommandWithPrompt(prompt)
+	} else {
+		cmd += rc.BuildCommand()
+	}
+
+	return cmd
+}
+
 // BuildAgentStartupCommand is a convenience function for starting agent sessions.
 // It sets standard environment variables (GT_ROLE, BD_ACTOR, GIT_AUTHOR_NAME)
 // and builds the full startup command.
+// For town-level agents (rigPath empty), it attempts to detect town root from cwd.
 func BuildAgentStartupCommand(role, bdActor, rigPath, prompt string) string {
 	envVars := map[string]string{
 		"GT_ROLE":         role,
@@ -918,6 +953,18 @@ func BuildAgentStartupCommand(role, bdActor, rigPath, prompt string) string {
 		"GIT_AUTHOR_NAME": bdActor,
 	}
 	return BuildStartupCommand(envVars, rigPath, prompt)
+}
+
+// BuildAgentStartupCommandWithTownRoot is a convenience function for starting agent sessions
+// with an explicit town root. Use this when the town root is known and cwd detection is unreliable.
+// This is useful for daemon-spawned sessions where the daemon's cwd may not be in the town.
+func BuildAgentStartupCommandWithTownRoot(role, bdActor, townRoot, prompt string) string {
+	envVars := map[string]string{
+		"GT_ROLE":         role,
+		"BD_ACTOR":        bdActor,
+		"GIT_AUTHOR_NAME": bdActor,
+	}
+	return BuildStartupCommandWithTownRoot(envVars, townRoot, prompt)
 }
 
 // BuildPolecatStartupCommand builds the startup command for a polecat.
