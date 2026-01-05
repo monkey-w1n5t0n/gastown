@@ -282,9 +282,13 @@ func runDone(cmd *cobra.Command, args []string) error {
 
 // updateAgentStateOnDone updates the agent bead state when work is complete.
 // Maps exit type to agent state:
-//   - COMPLETED → "done"
+//   - COMPLETED → "recyclable" (polecat can be nuked immediately after MR submit)
 //   - ESCALATED → "stuck"
 //   - DEFERRED → "idle"
+//
+// The "recyclable" state enables the ephemeral polecat model where polecats
+// are cleaned up immediately after submitting their MR to the merge queue.
+// Conflict resolution is handled by the Refinery dispatching to fresh polecats.
 //
 // Also self-reports cleanup_status for ZFC compliance (#10).
 func updateAgentStateOnDone(cwd, townRoot, exitType, issueID string) {
@@ -311,7 +315,10 @@ func updateAgentStateOnDone(cwd, townRoot, exitType, issueID string) {
 	var newState string
 	switch exitType {
 	case ExitCompleted:
-		newState = "done"
+		// Ephemeral polecat model: polecat is recyclable immediately after MR submit.
+		// Work is pushed, MR is in queue - polecat can be safely nuked.
+		// If conflicts arise, Refinery creates new conflict-resolution tasks for fresh polecats.
+		newState = "recyclable"
 	case ExitEscalated:
 		newState = "stuck"
 	case ExitDeferred:

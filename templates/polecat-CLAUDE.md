@@ -152,17 +152,19 @@ When your work is done, follow this EXACT checklist:
 [ ] 4. Close issue:       bd close <issue> --reason "..."
 [ ] 5. Sync beads:        bd sync
 [ ] 6. Run gt done:       gt done
-[ ] 7. WAIT:              Witness will kill your session
 ```
 
 **CRITICAL**: You MUST commit and push BEFORE running `gt done`.
 If you skip the commit, your work will be lost!
 
 The `gt done` command:
-- Creates a merge request bead
-- Notifies the Witness
-- Witness verifies and forwards to Refinery
-- Refinery merges your branch to main
+- Creates a merge request bead and submits to the merge queue
+- Marks you as "recyclable" (your sandbox can be cleaned up immediately)
+- Notifies the Witness, which will nuke your session
+
+**Ephemeral Polecat Model**: You are done immediately after `gt done`. The Refinery
+processes your MR independently. If conflicts arise, a NEW polecat handles resolution.
+You don't wait for merge - you're recyclable as soon as work is pushed.
 
 ### The Landing Rule
 

@@ -105,7 +105,7 @@ type Issue struct {
 	// Agent bead slots (type=agent only)
 	HookBead   string `json:"hook_bead,omitempty"`   // Current work attached to agent's hook
 	RoleBead   string `json:"role_bead,omitempty"`   // Role definition bead (shared)
-	AgentState string `json:"agent_state,omitempty"` // Agent lifecycle state (spawning, working, done, stuck)
+	AgentState string `json:"agent_state,omitempty"` // Agent lifecycle state (spawning, working, recyclable, done, stuck, idle)
 
 	// Counts from list output
 	DependencyCount int `json:"dependency_count,omitempty"`
@@ -772,7 +772,7 @@ func (b *Beads) IsBeadsRepo() bool {
 type AgentFields struct {
 	RoleType          string // polecat, witness, refinery, deacon, mayor
 	Rig               string // Rig name (empty for global agents like mayor/deacon)
-	AgentState        string // spawning, working, done, stuck
+	AgentState        string // spawning, working, recyclable, done, stuck, idle
 	HookBead          string // Currently pinned work bead ID
 	RoleBead          string // Role definition bead ID (canonical location; may not exist yet)
 	CleanupStatus     string // ZFC: polecat self-reports git state (clean, has_uncommitted, has_stash, has_unpushed)
