@@ -53,7 +53,6 @@ Target Resolution:
   gt sling gt-abc deacon/dogs/alpha     # Specific dog
 
 Spawning Options (when target is a rig):
-  gt sling gp-abc greenplace --molecule mol-review  # Use specific workflow
   gt sling gp-abc greenplace --create               # Create polecat if missing
   gt sling gp-abc greenplace --naked                # No-tmux (manual start)
   gt sling gp-abc greenplace --force                # Ignore unread mail
@@ -73,11 +72,6 @@ Formula Slinging:
 Formula-on-Bead (--on flag):
   gt sling mol-review --on gt-abc       # Apply formula to existing work
   gt sling shiny --on gt-abc crew       # Apply formula, sling to crew
-
-Quality Levels (shorthand for polecat workflows):
-  gt sling gp-abc greenplace --quality=basic   # mol-polecat-basic (trivial fixes)
-  gt sling gp-abc greenplace --quality=shiny   # mol-polecat-shiny (standard)
-  gt sling gp-abc greenplace --quality=chrome  # mol-polecat-chrome (max rigor)
 
 Compare:
   gt hook <bead>      # Just attach (no action)
@@ -106,10 +100,8 @@ var (
 	// Flags migrated for polecat spawning (used by sling for work assignment
 	slingNaked    bool   // --naked: no-tmux mode (skip session creation)
 	slingCreate   bool   // --create: create polecat if it doesn't exist
-	slingMolecule string // --molecule: workflow to instantiate on the bead
 	slingForce    bool   // --force: force spawn even if polecat has unread mail
 	slingAccount  string // --account: Claude Code account handle to use
-	slingQuality  string // --quality: shorthand for polecat workflow (basic|shiny|chrome)
 	slingNoConvoy bool   // --no-convoy: skip auto-convoy creation
 )
 
@@ -124,10 +116,8 @@ func init() {
 	// Flags for polecat spawning (when target is a rig)
 	slingCmd.Flags().BoolVar(&slingNaked, "naked", false, "No-tmux mode: assign work but skip session creation (manual start)")
 	slingCmd.Flags().BoolVar(&slingCreate, "create", false, "Create polecat if it doesn't exist")
-	slingCmd.Flags().StringVar(&slingMolecule, "molecule", "", "Molecule workflow to instantiate on the bead")
 	slingCmd.Flags().BoolVar(&slingForce, "force", false, "Force spawn even if polecat has unread mail")
 	slingCmd.Flags().StringVar(&slingAccount, "account", "", "Claude Code account handle to use")
-	slingCmd.Flags().StringVarP(&slingQuality, "quality", "q", "", "Polecat workflow quality level (basic|shiny|chrome)")
 	slingCmd.Flags().BoolVar(&slingNoConvoy, "no-convoy", false, "Skip auto-convoy creation for single-issue sling")
 
 	rootCmd.AddCommand(slingCmd)
@@ -160,22 +150,6 @@ func runSling(cmd *cobra.Command, args []string) error {
 		if rigName, isRig := IsRigName(lastArg); isRig {
 			return runBatchSling(args[:len(args)-1], rigName, townBeadsDir)
 		}
-	}
-
-	// --quality is shorthand for formula-on-bead with polecat workflow
-	// Convert: gt sling gp-abc greenplace --quality=shiny
-	// To:      gt sling mol-polecat-shiny --on gt-abc gastown
-	if slingQuality != "" {
-		qualityFormula, err := qualityToFormula(slingQuality)
-		if err != nil {
-			return err
-		}
-		// The first arg should be the bead, and we wrap it with the formula
-		if slingOnTarget != "" {
-			return fmt.Errorf("--quality cannot be used with --on (both specify formula)")
-		}
-		slingOnTarget = args[0]  // The bead becomes --on target
-		args[0] = qualityFormula // The formula becomes first arg
 	}
 
 	// Determine mode based on flags and argument types
@@ -431,11 +405,15 @@ func runSling(cmd *cobra.Command, args []string) error {
 	}
 
 	// Hook the bead using bd update
-	// Set BEADS_DIR to town-level beads so hq-* beads are accessible
-	// even when running from polecat worktree (which only sees gt-* via redirect)
+	// For town-level beads (hq-*), set BEADS_DIR to town beads
+	// For rig-level beads (gt-*, bd-*, etc.), use redirect-based routing from hookWorkDir
 	hookCmd := exec.Command("bd", "--no-daemon", "update", beadID, "--status=hooked", "--assignee="+targetAgent)
-	hookCmd.Env = append(os.Environ(), "BEADS_DIR="+townBeadsDir)
-	if hookWorkDir != "" {
+	if strings.HasPrefix(beadID, "hq-") {
+		// Town-level bead: set BEADS_DIR explicitly
+		hookCmd.Env = append(os.Environ(), "BEADS_DIR="+townBeadsDir)
+		hookCmd.Dir = townRoot
+	} else if hookWorkDir != "" {
+		// Rig-level bead: use redirect from polecat's worktree
 		hookCmd.Dir = hookWorkDir
 	} else {
 		hookCmd.Dir = townRoot
@@ -971,29 +949,29 @@ func runSlingFormula(args []string) error {
 func updateAgentHookBead(agentID, beadID, workDir, townBeadsDir string) {
 	_ = townBeadsDir // Not used - BEADS_DIR breaks redirect mechanism
 
-	// Convert agent ID to agent bead ID
-	// Format examples (canonical: prefix-rig-role-name):
-	//   greenplace/crew/max -> gt-greenplace-crew-max
-	//   greenplace/polecats/Toast -> gt-greenplace-polecat-Toast
-	//   mayor -> gt-mayor
-	//   greenplace/witness -> gt-greenplace-witness
-	agentBeadID := agentIDToBeadID(agentID)
-	if agentBeadID == "" {
-		return
-	}
-
 	// Determine the directory to run bd commands from:
 	// - If workDir is provided (polecat's clone path), use it for redirect-based routing
 	// - Otherwise fall back to town root
 	bdWorkDir := workDir
+	townRoot, err := workspace.FindFromCwd()
+	if err != nil {
+		// Not in a Gas Town workspace - can't update agent bead
+		fmt.Fprintf(os.Stderr, "Warning: couldn't find town root to update agent hook: %v\n", err)
+		return
+	}
 	if bdWorkDir == "" {
-		townRoot, err := workspace.FindFromCwd()
-		if err != nil {
-			// Not in a Gas Town workspace - can't update agent bead
-			fmt.Fprintf(os.Stderr, "Warning: couldn't find town root to update agent hook: %v\n", err)
-			return
-		}
 		bdWorkDir = townRoot
+	}
+
+	// Convert agent ID to agent bead ID
+	// Format examples (canonical: prefix-rig-role-name):
+	//   greenplace/crew/max -> gt-greenplace-crew-max
+	//   greenplace/polecats/Toast -> gt-greenplace-polecat-Toast
+	//   mayor -> hq-mayor
+	//   greenplace/witness -> gt-greenplace-witness
+	agentBeadID := agentIDToBeadID(agentID, townRoot)
+	if agentBeadID == "" {
+		return
 	}
 
 	// Run from workDir WITHOUT BEADS_DIR to enable redirect-based routing.
@@ -1038,7 +1016,8 @@ func detectActor() string {
 // Uses canonical naming: prefix-rig-role-name
 // Town-level agents (Mayor, Deacon) use hq- prefix and are stored in town beads.
 // Rig-level agents use the rig's configured prefix (default "gt-").
-func agentIDToBeadID(agentID string) string {
+// townRoot is needed to look up the rig's configured prefix.
+func agentIDToBeadID(agentID, townRoot string) string {
 	// Handle simple cases (town-level agents with hq- prefix)
 	if agentID == "mayor" {
 		return beads.MayorBeadIDTown()
@@ -1054,34 +1033,22 @@ func agentIDToBeadID(agentID string) string {
 	}
 
 	rig := parts[0]
+	prefix := config.GetRigPrefix(townRoot, rig)
 
 	switch {
 	case len(parts) == 2 && parts[1] == "witness":
-		return beads.WitnessBeadID(rig)
+		return beads.WitnessBeadIDWithPrefix(prefix, rig)
 	case len(parts) == 2 && parts[1] == "refinery":
-		return beads.RefineryBeadID(rig)
+		return beads.RefineryBeadIDWithPrefix(prefix, rig)
 	case len(parts) == 3 && parts[1] == "crew":
-		return beads.CrewBeadID(rig, parts[2])
+		return beads.CrewBeadIDWithPrefix(prefix, rig, parts[2])
 	case len(parts) == 3 && parts[1] == "polecats":
-		return beads.PolecatBeadID(rig, parts[2])
+		return beads.PolecatBeadIDWithPrefix(prefix, rig, parts[2])
 	default:
 		return ""
 	}
 }
 
-// qualityToFormula converts a quality level to the corresponding polecat workflow formula.
-func qualityToFormula(quality string) (string, error) {
-	switch strings.ToLower(quality) {
-	case "basic", "b":
-		return "mol-polecat-basic", nil
-	case "shiny", "s":
-		return "mol-polecat-shiny", nil
-	case "chrome", "c":
-		return "mol-polecat-chrome", nil
-	default:
-		return "", fmt.Errorf("invalid quality level '%s' (use: basic, shiny, or chrome)", quality)
-	}
-}
 
 // IsDogTarget checks if target is a dog target pattern.
 // Returns the dog name (or empty for pool dispatch) and true if it's a dog target.
@@ -1403,9 +1370,14 @@ func runBatchSling(beadIDs []string, rigName string, townBeadsDir string) error 
 		}
 
 		// Hook the bead
+		// For town-level beads (hq-*), set BEADS_DIR; for rig-level beads use redirect
 		hookCmd := exec.Command("bd", "--no-daemon", "update", beadID, "--status=hooked", "--assignee="+targetAgent)
-		hookCmd.Env = append(os.Environ(), "BEADS_DIR="+townBeadsDir)
-		if hookWorkDir != "" {
+		if strings.HasPrefix(beadID, "hq-") {
+			// Town-level bead: set BEADS_DIR and run from town root (parent of townBeadsDir)
+			hookCmd.Env = append(os.Environ(), "BEADS_DIR="+townBeadsDir)
+			hookCmd.Dir = filepath.Dir(townBeadsDir)
+		} else if hookWorkDir != "" {
+			// Rig-level bead: use redirect from polecat's worktree
 			hookCmd.Dir = hookWorkDir
 		}
 		hookCmd.Stderr = os.Stderr

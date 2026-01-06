@@ -11,6 +11,7 @@ import (
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/git"
 	"github.com/steveyegge/gastown/internal/mail"
+	"github.com/steveyegge/gastown/internal/polecat"
 	"github.com/steveyegge/gastown/internal/rig"
 	"github.com/steveyegge/gastown/internal/style"
 	"github.com/steveyegge/gastown/internal/workspace"
@@ -419,6 +420,20 @@ func updateAgentStateOnDone(cwd, townRoot, exitType, _ string) { // issueID unus
 		beadsPath = filepath.Join(townRoot, ctx.Rig)
 	}
 	bd := beads.New(beadsPath)
+
+	// BUG FIX (gt-vwjz6): Close hooked beads before clearing the hook.
+	// Previously, the agent's hook_bead slot was cleared but the hooked bead itself
+	// stayed status=hooked forever. Now we close the hooked bead before clearing.
+	if agentBead, err := bd.Show(agentBeadID); err == nil && agentBead.HookBead != "" {
+		hookedBeadID := agentBead.HookBead
+		// Only close if the hooked bead exists and is still in "hooked" status
+		if hookedBead, err := bd.Show(hookedBeadID); err == nil && hookedBead.Status == beads.StatusHooked {
+			if err := bd.Close(hookedBeadID); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: couldn't close hooked bead %s: %v\n", hookedBeadID, err)
+			}
+		}
+	}
+
 	emptyHook := ""
 	if err := bd.UpdateAgentState(agentBeadID, newState, &emptyHook); err != nil {
 		// Log warning instead of silent ignore - helps debug cross-beads issues
@@ -429,8 +444,8 @@ func updateAgentStateOnDone(cwd, townRoot, exitType, _ string) { // issueID unus
 	// ZFC #10: Self-report cleanup status
 	// Compute git state and report so Witness can decide removal safety
 	cleanupStatus := computeCleanupStatus(cwd)
-	if cleanupStatus != "" {
-		if err := bd.UpdateAgentCleanupStatus(agentBeadID, cleanupStatus); err != nil {
+	if cleanupStatus != polecat.CleanupUnknown {
+		if err := bd.UpdateAgentCleanupStatus(agentBeadID, string(cleanupStatus)); err != nil {
 			// Log warning instead of silent ignore
 			fmt.Fprintf(os.Stderr, "Warning: couldn't update agent %s cleanup status: %v\n", agentBeadID, err)
 			return
@@ -461,23 +476,23 @@ func getDispatcherFromBead(cwd, issueID string) string {
 
 // computeCleanupStatus checks git state and returns the cleanup status.
 // Returns the most critical issue: has_unpushed > has_stash > has_uncommitted > clean
-func computeCleanupStatus(cwd string) string {
+func computeCleanupStatus(cwd string) polecat.CleanupStatus {
 	g := git.NewGit(cwd)
 	status, err := g.CheckUncommittedWork()
 	if err != nil {
 		// If we can't check, report unknown - Witness should be cautious
-		return "unknown"
+		return polecat.CleanupUnknown
 	}
 
 	// Check in priority order (most critical first)
 	if status.UnpushedCommits > 0 {
-		return "has_unpushed"
+		return polecat.CleanupUnpushed
 	}
 	if status.StashCount > 0 {
-		return "has_stash"
+		return polecat.CleanupStash
 	}
 	if status.HasUncommittedChanges {
-		return "has_uncommitted"
+		return polecat.CleanupUncommitted
 	}
-	return "clean"
+	return polecat.CleanupClean
 }

@@ -364,9 +364,21 @@ func (d *Daemon) restartSession(sessionName, identity string) error {
 		// Non-fatal - Claude might still start
 	}
 	_ = d.tmux.AcceptBypassPermissionsWarning(sessionName)
+	time.Sleep(constants.ShutdownNotifyDelay)
 
-	// Note: gt prime is handled by Claude's SessionStart hook, not injected here.
-	// Injecting it via SendKeysDelayed causes rogue text to appear in the terminal.
+	// GUPP: Gas Town Universal Propulsion Principle
+	// Send startup nudge for predecessor discovery via /resume
+	recipient := identityToBDActor(identity)
+	_ = session.StartupNudge(d.tmux, sessionName, session.StartupNudgeConfig{
+		Recipient: recipient,
+		Sender:    "deacon",
+		Topic:     "lifecycle-restart",
+	}) // Non-fatal
+
+	// Send propulsion nudge to trigger autonomous execution.
+	// Wait for beacon to be fully processed (needs to be separate prompt)
+	time.Sleep(2 * time.Second)
+	_ = d.tmux.NudgeSession(sessionName, session.PropulsionNudgeForRole(parsed.RoleType, workDir)) // Non-fatal
 
 	return nil
 }
@@ -614,13 +626,17 @@ func (d *Daemon) identityToAgentBeadID(identity string) string {
 	case "mayor":
 		return beads.MayorBeadIDTown()
 	case "witness":
-		return beads.WitnessBeadID(parsed.RigName)
+		prefix := config.GetRigPrefix(d.config.TownRoot, parsed.RigName)
+		return beads.WitnessBeadIDWithPrefix(prefix, parsed.RigName)
 	case "refinery":
-		return beads.RefineryBeadID(parsed.RigName)
+		prefix := config.GetRigPrefix(d.config.TownRoot, parsed.RigName)
+		return beads.RefineryBeadIDWithPrefix(prefix, parsed.RigName)
 	case "crew":
-		return beads.CrewBeadID(parsed.RigName, parsed.AgentName)
+		prefix := config.GetRigPrefix(d.config.TownRoot, parsed.RigName)
+		return beads.CrewBeadIDWithPrefix(prefix, parsed.RigName, parsed.AgentName)
 	case "polecat":
-		return beads.PolecatBeadID(parsed.RigName, parsed.AgentName)
+		prefix := config.GetRigPrefix(d.config.TownRoot, parsed.RigName)
+		return beads.PolecatBeadIDWithPrefix(prefix, parsed.RigName, parsed.AgentName)
 	default:
 		return ""
 	}
@@ -648,9 +664,14 @@ func (d *Daemon) checkStaleAgents() {
 		d.logger.Printf("Warning: could not load rigs config: %v", err)
 	} else {
 		// Add rig-specific agents (witness, refinery) for each discovered rig
-		for rigName := range rigsConfig.Rigs {
-			agentBeadIDs = append(agentBeadIDs, beads.WitnessBeadID(rigName))
-			agentBeadIDs = append(agentBeadIDs, beads.RefineryBeadID(rigName))
+		for rigName, rigEntry := range rigsConfig.Rigs {
+			// Get rig prefix from config (defaults to "gt" if not set)
+			prefix := "gt"
+			if rigEntry.BeadsConfig != nil && rigEntry.BeadsConfig.Prefix != "" {
+				prefix = strings.TrimSuffix(rigEntry.BeadsConfig.Prefix, "-")
+			}
+			agentBeadIDs = append(agentBeadIDs, beads.WitnessBeadIDWithPrefix(prefix, rigName))
+			agentBeadIDs = append(agentBeadIDs, beads.RefineryBeadIDWithPrefix(prefix, rigName))
 		}
 	}
 

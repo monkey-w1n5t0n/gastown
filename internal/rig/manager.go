@@ -62,13 +62,14 @@ func NewManager(townRoot string, rigsConfig *config.RigsConfig, g *git.Git) *Man
 }
 
 // DiscoverRigs returns all rigs registered in the workspace.
+// Rigs that fail to load are logged to stderr and skipped; partial results are returned.
 func (m *Manager) DiscoverRigs() ([]*Rig, error) {
 	var rigs []*Rig
 
 	for name, entry := range m.config.Rigs {
 		rig, err := m.loadRig(name, entry)
 		if err != nil {
-			// Log error but continue with other rigs
+			fmt.Fprintf(os.Stderr, "Warning: failed to load rig %q: %v\n", name, err)
 			continue
 		}
 		rigs = append(rigs, rig)
@@ -443,19 +444,19 @@ Use crew for your own workspace. Polecats are for batch work dispatch.
 	// Town-level agents (mayor, deacon) are created by gt install in town beads.
 	if err := m.initAgentBeads(rigPath, opts.Name, opts.BeadsPrefix); err != nil {
 		// Non-fatal: log warning but continue
-		fmt.Printf("  Warning: Could not create agent beads: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Warning: Could not create agent beads: %v\n", err)
 	}
 
 	// Seed patrol molecules for this rig
 	if err := m.seedPatrolMolecules(rigPath); err != nil {
 		// Non-fatal: log warning but continue
-		fmt.Printf("  Warning: Could not seed patrol molecules: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Warning: Could not seed patrol molecules: %v\n", err)
 	}
 
 	// Create plugin directories
 	if err := m.createPluginDirectories(rigPath); err != nil {
 		// Non-fatal: log warning but continue
-		fmt.Printf("  Warning: Could not create plugin directories: %v\n", err)
+		fmt.Fprintf(os.Stderr, "  Warning: Could not create plugin directories: %v\n", err)
 	}
 
 	// Register in town config
@@ -546,6 +547,15 @@ func (m *Manager) initBeads(rigPath, prefix string) error {
 	// Ignore errors - fingerprint is optional for functionality
 	_, _ = migrateCmd.CombinedOutput()
 
+	// Add route from rig beads to town beads for cross-database resolution.
+	// This allows rig beads to resolve hq-* prefixed beads (role beads, etc.)
+	// that are stored in town beads.
+	townRoute := beads.Route{Prefix: "hq-", Path: ".."}
+	if err := beads.AppendRouteToDir(beadsDir, townRoute); err != nil {
+		// Non-fatal: role slot set will fail but agent beads still work
+		fmt.Printf("   ⚠ Could not add route to town beads: %v\n", err)
+	}
+
 	return nil
 }
 
@@ -555,14 +565,15 @@ func (m *Manager) initBeads(rigPath, prefix string) error {
 // Town-level agents (Mayor, Deacon) are created by gt install in town beads.
 // Role beads are also created by gt install with hq- prefix.
 //
-// Format: <prefix>-<rig>-<role> (e.g., gt-gastown-witness)
+// Rig-level agents (Witness, Refinery) are created here in rig beads with rig prefix.
+// Format: <prefix>-<rig>-<role> (e.g., pi-pixelforge-witness)
 //
 // Agent beads track lifecycle state for ZFC compliance (gt-h3hak, gt-pinkq).
-func (m *Manager) initAgentBeads(_, rigName, _ string) error { // rigPath and prefix unused until Phase 2
-	// TEMPORARY (gt-4r1ph): Currently all agent beads go in town beads.
-	// After Phase 2, only Mayor/Deacon will be here; Witness/Refinery go to rig beads.
-	townBeadsDir := filepath.Join(m.townRoot, ".beads")
-	bd := beads.NewWithBeadsDir(m.townRoot, townBeadsDir)
+func (m *Manager) initAgentBeads(rigPath, rigName, prefix string) error {
+	// Rig-level agents go in rig beads with rig prefix (per docs/architecture.md).
+	// Town-level agents (Mayor, Deacon) are created by gt install in town beads.
+	rigBeadsDir := filepath.Join(rigPath, ".beads")
+	bd := beads.NewWithBeadsDir(rigPath, rigBeadsDir)
 
 	// Define rig-level agents to create
 	type agentDef struct {
@@ -572,17 +583,17 @@ func (m *Manager) initAgentBeads(_, rigName, _ string) error { // rigPath and pr
 		desc     string
 	}
 
-	// Create rig-specific agents using gt prefix (agents stored in town beads).
-	// Format: gt-<rig>-<role> (e.g., gt-gastown-witness)
+	// Create rig-specific agents using rig prefix in rig beads.
+	// Format: <prefix>-<rig>-<role> (e.g., pi-pixelforge-witness)
 	agents := []agentDef{
 		{
-			id:       beads.WitnessBeadID(rigName),
+			id:       beads.WitnessBeadIDWithPrefix(prefix, rigName),
 			roleType: "witness",
 			rig:      rigName,
 			desc:     fmt.Sprintf("Witness for %s - monitors polecat health and progress.", rigName),
 		},
 		{
-			id:       beads.RefineryBeadID(rigName),
+			id:       beads.RefineryBeadIDWithPrefix(prefix, rigName),
 			roleType: "refinery",
 			rig:      rigName,
 			desc:     fmt.Sprintf("Refinery for %s - processes merge queue.", rigName),
@@ -791,12 +802,22 @@ func (m *Manager) createRoleCLAUDEmd(workspacePath string, role string, rigName 
 	// Get town name for session names
 	townName, _ := workspace.GetTownName(m.townRoot)
 
+	// Get default branch from rig config (default to "main" if not set)
+	defaultBranch := "main"
+	if rigName != "" {
+		rigPath := filepath.Join(m.townRoot, rigName)
+		if rigCfg, err := LoadRigConfig(rigPath); err == nil && rigCfg.DefaultBranch != "" {
+			defaultBranch = rigCfg.DefaultBranch
+		}
+	}
+
 	data := templates.RoleData{
 		Role:          role,
 		RigName:       rigName,
 		TownRoot:      m.townRoot,
 		TownName:      townName,
 		WorkDir:       workspacePath,
+		DefaultBranch: defaultBranch,
 		Polecat:       workerName, // Used for crew member name as well
 		MayorSession:  fmt.Sprintf("gt-%s-mayor", townName),
 		DeaconSession: fmt.Sprintf("gt-%s-deacon", townName),

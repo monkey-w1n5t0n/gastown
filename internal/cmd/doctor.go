@@ -45,6 +45,10 @@ Clone divergence checks:
   - persistent-role-branches Detect crew/witness/refinery not on main
   - clone-divergence         Detect clones significantly behind origin/main
 
+Crew workspace checks:
+  - crew-state               Validate crew worker state.json files (fixable)
+  - crew-worktrees           Detect stale cross-rig worktrees (fixable)
+
 Rig checks (with --rig flag):
   - rig-is-git-repo          Verify rig is a valid git repository
   - git-exclude-configured   Check .git/info/exclude has Gas Town dirs (fixable)
@@ -56,6 +60,7 @@ Rig checks (with --rig flag):
 
 Routing checks (fixable):
   - routes-config            Check beads routing configuration
+  - prefix-mismatch          Detect rigs.json vs routes.jsonl prefix mismatches (fixable)
 
 Session hook checks:
   - session-hooks            Check settings.json use session-start.sh
@@ -107,6 +112,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	d.Register(doctor.NewBeadsDatabaseCheck())
 	d.Register(doctor.NewBdDaemonCheck())
 	d.Register(doctor.NewPrefixConflictCheck())
+	d.Register(doctor.NewPrefixMismatchCheck())
 	d.Register(doctor.NewRoutesCheck())
 	d.Register(doctor.NewOrphanSessionCheck())
 	d.Register(doctor.NewOrphanProcessCheck())
@@ -136,6 +142,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 
 	// Crew workspace checks
 	d.Register(doctor.NewCrewStateCheck())
+	d.Register(doctor.NewCrewWorktreeCheck())
 	d.Register(doctor.NewCommandsCheck())
 
 	// Lifecycle hygiene checks

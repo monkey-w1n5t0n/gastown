@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/boot"
 	"github.com/steveyegge/gastown/internal/config"
@@ -70,18 +71,19 @@ func (d *Daemon) Run() error {
 	// Acquire exclusive lock to prevent multiple daemons from running.
 	// This prevents the TOCTOU race condition where multiple concurrent starts
 	// can all pass the IsRunning() check before any writes the PID file.
+	// Uses gofrs/flock for cross-platform compatibility (Unix + Windows).
 	lockFile := filepath.Join(d.config.TownRoot, "daemon", "daemon.lock")
-	lock, err := os.OpenFile(lockFile, os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return fmt.Errorf("opening lock file: %w", err)
-	}
-	defer lock.Close()
+	fileLock := flock.New(lockFile)
 
 	// Try to acquire exclusive lock (non-blocking)
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	locked, err := fileLock.TryLock()
+	if err != nil {
+		return fmt.Errorf("acquiring lock: %w", err)
+	}
+	if !locked {
 		return fmt.Errorf("daemon already running (lock held by another process)")
 	}
-	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
+	defer fileLock.Unlock()
 
 	// Write PID file
 	if err := os.WriteFile(d.config.PidFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
@@ -415,7 +417,8 @@ func (d *Daemon) ensureWitnessesRunning() {
 
 // ensureWitnessRunning ensures the witness for a specific rig is running.
 func (d *Daemon) ensureWitnessRunning(rigName string) {
-	agentID := beads.WitnessBeadID(rigName)
+	prefix := config.GetRigPrefix(d.config.TownRoot, rigName)
+	agentID := beads.WitnessBeadIDWithPrefix(prefix, rigName)
 	sessionName := "gt-" + rigName + "-witness"
 
 	// Check agent bead state (ZFC: trust what agent reports)
@@ -501,7 +504,8 @@ func (d *Daemon) ensureRefineriesRunning() {
 
 // ensureRefineryRunning ensures the refinery for a specific rig is running.
 func (d *Daemon) ensureRefineryRunning(rigName string) {
-	agentID := beads.RefineryBeadID(rigName)
+	prefix := config.GetRigPrefix(d.config.TownRoot, rigName)
+	agentID := beads.RefineryBeadIDWithPrefix(prefix, rigName)
 	sessionName := "gt-" + rigName + "-refinery"
 
 	// Check agent bead state (ZFC: trust what agent reports)
